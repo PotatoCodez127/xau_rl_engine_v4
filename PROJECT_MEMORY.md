@@ -167,3 +167,27 @@ Establish the live, asynchronous execution engine on the local edge machine.
 1. Build `deployment/live_inference.py` to run the ONNX graphs via `onnxruntime`.
 2. Connect `MetaTrader5` API polling logic to feed the ONNX runtime.
 3. Integrate WhatsApp Webhook alerts for decoupled execution monitoring.
+
+### **Current Project State:**
+*   **Phase:** 5 - Deployment & Live Execution
+*   **Status:** Edge deployment infrastructure completed. ONNX runtime integration, MT5 polling loop, and asynchronous WhatsApp alerting successfully scripted.
+*   **Active Commit:** `feat(deployment): implement live_inference.py integrating ONNX runtime, MT5 polling, and WhatsApp webhooks`
+
+### **Completed Tasks:**
+- [x] Implement ATR-scaled volatility normalization and $\tanh$ squashing.
+- [x] Build `envs/xau_mtf_env.py` using `gymnasium.spaces.Dict`.
+- [x] Build `models/oracle_transformer.py` using Multi-Timeframe Experts.
+- [x] Build `models/gatekeeper_hmm.py` for physical Regime Detection filtering.
+- [x] Build `models/manager_sac.py` using a fast MLP.
+- [x] Integrate all systems into `training/train_pipeline.py`.
+- [x] Build `training/cpcv_validation.py` to structure strict Out-Of-Sample embargo windows.
+- [x] Build `deployment/export_to_onnx.py` to freeze the PyTorch brains.
+- [x] Build `deployment/live_inference.py` for CPU-optimized edge execution and WhatsApp webhooks.
+
+### **Active Objective:**
+Transition to live paper trading and historical data collection to begin the first true training loop.
+
+### **Next Steps (Queue):**
+1. Connect `data/mt5_streamer.py` to pull the first massive historical dataset (e.g., 5 years of XAUUSD M15 data).
+2. Execute the CPCV PyTorch training loop on cloud GPUs.
+3. Deploy the compiled ONNX models to a live MT5 Demo account for forward-testing.
