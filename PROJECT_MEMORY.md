@@ -102,3 +102,24 @@ Merge the Oracle, Gatekeeper, and Manager into a unified training pipeline.
 1. Build `training/train_pipeline.py` to synchronize the outputs of the three brains.
 2. Build `training/cpcv_validation.py` for Combinatorial Purged Cross-Validation.
 3. Prepare ONNX export scripts for edge deployment.
+
+### **Current Project State:**
+*   **Phase:** 4 - Training Pipeline & Integration
+*   **Status:** Tri-Brain components successfully synchronized within `train_pipeline.py`. Data flows accurately from MTF Environment -> Oracle -> Gatekeeper -> Manager.
+*   **Active Commit:** `feat(training): implement train_pipeline.py to synchronize Oracle, Gatekeeper, and SAC Manager in a unified training loop`
+
+### **Completed Tasks:**
+- [x] Implement ATR-scaled volatility normalization and $\tanh$ squashing.
+- [x] Build `envs/xau_mtf_env.py` using `gymnasium.spaces.Dict`.
+- [x] Build `models/oracle_transformer.py` using Multi-Timeframe Experts.
+- [x] Build `models/gatekeeper_hmm.py` for physical Regime Detection filtering.
+- [x] Build `models/manager_sac.py` using a fast MLP.
+- [x] Integrate all systems into `training/train_pipeline.py`.
+
+### **Active Objective:**
+Develop the mathematical validation firewalls to prove out-of-sample robustness before transitioning to deployment.
+
+### **Next Steps (Queue):**
+1. Build `training/cpcv_validation.py` for Combinatorial Purged Cross-Validation to eliminate look-ahead bias.
+2. Formulate the specific PyTorch Loss backward passes (Focal Loss for Oracle, Bellman for SAC).
+3. Prepare ONNX export scripts for edge deployment.
