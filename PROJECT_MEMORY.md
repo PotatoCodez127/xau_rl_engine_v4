@@ -254,3 +254,26 @@ Upload the raw 1m CSV/Parquet file to Google Colab and run the automated preproc
 
 ### **Active Objective:**
 Run `pytest` locally to confirm architecture integrity, then upload the 1m dataset to Google Colab for the final training run.
+
+### **Current Project State:**
+*   **Phase:** 8 - Data Ingestion & Pre-Training Setup
+*   **Status:** User is downloading 5+ years of 1M XAUUSD data. Testing methodology (CPCV) and post-training trader metrics (MDD, Profit Factor, Expectancy) defined.
+*   **Active Commit:** `chore: define post-training evaluation metrics and trader-centric performance analysis`
+
+### **Completed Tasks:**
+- [x] Implement ATR-scaled volatility normalization and wick-to-body spatial mapping.
+- [x] Build automated 1m data resampler for 15m, 30m, 1H, and 4H channels.
+- [x] Build `envs/xau_mtf_env.py` using `gymnasium.spaces.Dict`.
+- [x] Build Tri-Brain PyTorch models (Oracle, Gatekeeper, Manager).
+- [x] Build `training/cpcv_validation.py` to structure strict Out-Of-Sample embargo windows.
+- [x] Build `deployment/export_to_onnx.py` & `deployment/live_inference.py`.
+- [x] Execute local `pytest` suite.
+- [x] Design Google Colab checkpointing and Drive-mounting scripts.
+
+### **Active Objective:**
+Upload `XAUUSD_1M.csv` to Google Drive, initialize Colab, and prepare the Replay Buffer for the SAC Manager.
+
+### **Next Steps (Queue):**
+1. Implement a memory-efficient Replay Buffer that saves to Google Drive checkpoints.
+2. Run the Colab notebook cells to build the Parquet tensor and train the brains.
+3. Generate the CPCV Trader's Tear Sheet (Performance Report).
