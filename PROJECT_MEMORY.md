@@ -144,3 +144,26 @@ Export the trained architectures and prepare the execution hardware segregation 
 ### **Next Steps (Queue):**
 1. Build `deployment/export_to_onnx.py` to freeze the PyTorch brains.
 2. Build `deployment/live_inference.py` to execute the lightweight models on the local edge machine.
+
+### **Current Project State:**
+*   **Phase:** 5 - Deployment Physics & Hardware Segregation
+*   **Status:** PyTorch tensor graphs successfully compiled into ONNX binary format for isolated, lightweight edge execution.
+*   **Active Commit:** `feat(deployment): implement export_to_onnx.py to compile Oracle and SAC Actor into lightweight computation graphs for edge inference`
+
+### **Completed Tasks:**
+- [x] Implement ATR-scaled volatility normalization and $\tanh$ squashing.
+- [x] Build `envs/xau_mtf_env.py` using `gymnasium.spaces.Dict`.
+- [x] Build `models/oracle_transformer.py` using Multi-Timeframe Experts.
+- [x] Build `models/gatekeeper_hmm.py` for physical Regime Detection filtering.
+- [x] Build `models/manager_sac.py` using a fast MLP.
+- [x] Integrate all systems into `training/train_pipeline.py`.
+- [x] Build `training/cpcv_validation.py` to structure strict Out-Of-Sample embargo windows.
+- [x] Build `deployment/export_to_onnx.py` to bypass heavy training libraries and prepare the models for C++ / CPU-optimized inference.
+
+### **Active Objective:**
+Establish the live, asynchronous execution engine on the local edge machine.
+
+### **Next Steps (Queue):**
+1. Build `deployment/live_inference.py` to run the ONNX graphs via `onnxruntime`.
+2. Connect `MetaTrader5` API polling logic to feed the ONNX runtime.
+3. Integrate WhatsApp Webhook alerts for decoupled execution monitoring.
