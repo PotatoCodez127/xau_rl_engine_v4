@@ -16,3 +16,24 @@ Build the custom Gymnasium multi-timeframe environment (`envs/xau_mtf_env.py`) t
 1. Write `envs/xau_mtf_env.py` (Gymnasium environment wrapper).
 2. Write `models/oracle_transformer.py` (The Spatial Oracle brain).
 3. Write `models/gatekeeper_hmm.py` (Regime Detection Gatekeeper).
+
+### **Current Project State:**
+*   **Phase:** 2 - Environment Construction & Validation
+*   **Status:** Gymnasium environment constructed. Unit testing pipeline established via Pytest.
+*   **Active Commit:** `test(envs): add pytest suite to validate environment observation spaces, action bounds, and reset/step loops`
+
+### **Completed Tasks:**
+- [x] Create project filetree hierarchy and initialized Git structure.
+- [x] Implement ATR-scaled volatility normalization and $\tanh$ squashing (`build_features.py`).
+- [x] Implement Cyclical Temporal Completion Meters to prevent look-ahead bias.
+- [x] Build `envs/xau_mtf_env.py` using `gymnasium.spaces.Dict` to house asymmetric 3D tensors.
+- [x] Build Continuous Action Spaces (`spaces.Box`) to control SAC volumetric sizing and MTF Risk:Reward floors.
+- [x] Write `pytest` validation scripts to enforce mathematical tensor integrity.
+
+### **Active Objective:**
+Transition from the environment into the neural network architecture, specifically designing the PyTorch models capable of digesting the `Dict` observation space.
+
+### **Next Steps (Queue):**
+1. Build `models/oracle_transformer.py` to accept the 4 distinct timeframe tensors using Self-Attention.
+2. Build `models/gatekeeper_hmm.py` for physical Regime Detection filtering.
+3. Build `models/manager_sac.py` to route the Oracle's outputs to the bounded execution space.
