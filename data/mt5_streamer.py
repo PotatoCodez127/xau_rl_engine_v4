@@ -8,7 +8,7 @@ class MT5DataStreamer:
     Handles high-fidelity historical data extraction and live polling from MetaTrader 5.
     Downloads asymmetric timeframes required for the Tri-Brain Spatial Tensor.
     """
-    def __init__(self, symbol: str = "XAUUSD"):
+    def __init__(self, symbol: str = "XAUUSDr"):
         self.symbol = symbol
         self.timeframes = {
             "15m": mt5.TIMEFRAME_M15,
@@ -72,7 +72,7 @@ class MT5DataStreamer:
 
 if __name__ == "__main__":
     # Extraction Execution
-    streamer = MT5DataStreamer(symbol="XAUUSD")
+    streamer = MT5DataStreamer(symbol="XAUUSDr")
     try:
         streamer.build_historical_dataset()
     finally:
