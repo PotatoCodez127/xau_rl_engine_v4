@@ -59,3 +59,26 @@ Develop the subordinate systems that process the Oracle's probabilities: The Ris
 1. Build `models/gatekeeper_hmm.py` for physical Regime Detection filtering.
 2. Build `models/manager_sac.py` to route the Oracle's outputs to the bounded execution space.
 3. Integrate all three brains into `training/train_pipeline.py`.
+
+### **Current Project State:**
+*   **Phase:** 3 - Neural Architecture (The Gatekeeper)
+*   **Status:** Context Gatekeeper constructed using Gaussian Hidden Markov Models for regime detection.
+*   **Active Commit:** `feat(models): implement gatekeeper_hmm.py for physical regime detection and MTF confluence filtering`
+
+### **Completed Tasks:**
+- [x] Create project filetree hierarchy and initialized Git structure.
+- [x] Implement ATR-scaled volatility normalization and $\tanh$ squashing (`build_features.py`).
+- [x] Implement Cyclical Temporal Completion Meters to prevent look-ahead bias.
+- [x] Build `envs/xau_mtf_env.py` using `gymnasium.spaces.Dict` to house asymmetric 3D tensors.
+- [x] Write `pytest` validation scripts.
+- [x] Generate `requirements.txt`.
+- [x] Build `models/oracle_transformer.py` using Multi-Timeframe Experts.
+- [x] Build `models/gatekeeper_hmm.py` for physical Regime Detection filtering.
+
+### **Active Objective:**
+Construct the Risk Manager (Soft Actor-Critic) to bridge the Oracle's predictions with the live execution environment.
+
+### **Next Steps (Queue):**
+1. Build `models/manager_sac.py` to route the Oracle's outputs to the bounded execution space.
+2. Integrate the Tri-Brain system into the Gymnasium step loop.
+3. Construct the `train_pipeline.py`.
