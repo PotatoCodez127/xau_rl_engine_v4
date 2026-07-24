@@ -123,3 +123,24 @@ Develop the mathematical validation firewalls to prove out-of-sample robustness 
 1. Build `training/cpcv_validation.py` for Combinatorial Purged Cross-Validation to eliminate look-ahead bias.
 2. Formulate the specific PyTorch Loss backward passes (Focal Loss for Oracle, Bellman for SAC).
 3. Prepare ONNX export scripts for edge deployment.
+
+### **Current Project State:**
+*   **Phase:** 4 - Training Pipeline & Validation
+*   **Status:** Combinatorial Purged Cross-Validation constructed. The mathematical firewall preventing look-ahead bias and sequential data leakage is fully operational.
+*   **Active Commit:** `feat(training): implement cpcv_validation.py with embargo and purging firewalls to eliminate look-ahead bias`
+
+### **Completed Tasks:**
+- [x] Implement ATR-scaled volatility normalization and $\tanh$ squashing.
+- [x] Build `envs/xau_mtf_env.py` using `gymnasium.spaces.Dict`.
+- [x] Build `models/oracle_transformer.py` using Multi-Timeframe Experts.
+- [x] Build `models/gatekeeper_hmm.py` for physical Regime Detection filtering.
+- [x] Build `models/manager_sac.py` using a fast MLP.
+- [x] Integrate all systems into `training/train_pipeline.py`.
+- [x] Build `training/cpcv_validation.py` to structure strict Out-Of-Sample embargo windows.
+
+### **Active Objective:**
+Export the trained architectures and prepare the execution hardware segregation pipeline using ONNX computation graphs.
+
+### **Next Steps (Queue):**
+1. Build `deployment/export_to_onnx.py` to freeze the PyTorch brains.
+2. Build `deployment/live_inference.py` to execute the lightweight models on the local edge machine.
