@@ -1,0 +1,22 @@
+# Data Processing & Math
+numpy>=1.24.0
+pandas>=2.0.0
+
+# Simulation Environment
+gymnasium>=0.29.0
+
+# Deep Learning & Neural Networks
+torch>=2.0.0
+
+# Regime Detection (Hidden Markov Models)
+hmmlearn>=0.3.0
+
+# Deployment & Inference
+onnx>=1.14.0
+onnxruntime>=1.15.0
+
+# Live Execution & Data Feed
+MetaTrader5>=5.0.43
+
+# Validation & Testing
+pytest>=7.4.0
