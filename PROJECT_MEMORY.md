@@ -191,3 +191,46 @@ Transition to live paper trading and historical data collection to begin the fir
 1. Connect `data/mt5_streamer.py` to pull the first massive historical dataset (e.g., 5 years of XAUUSD M15 data).
 2. Execute the CPCV PyTorch training loop on cloud GPUs.
 3. Deploy the compiled ONNX models to a live MT5 Demo account for forward-testing.
+
+### **Current Project State:**
+*   **Phase:** 6 - Data Ingestion & Pre-Training Setup
+*   **Status:** Manual OHLC export workflow confirmed. Colab training sequence and ONNX extraction roadmap mapped out.
+*   **Active Commit:** `chore: confirm manual OHLC export workflow for Google Colab training`
+
+### **Completed Tasks:**
+- [x] Implement ATR-scaled volatility normalization and wick-to-body spatial mapping.
+- [x] Build `envs/xau_mtf_env.py` using `gymnasium.spaces.Dict`.
+- [x] Build `models/oracle_transformer.py` using Multi-Timeframe Experts.
+- [x] Build `models/gatekeeper_hmm.py` for physical Regime Detection filtering.
+- [x] Build `models/manager_sac.py` using a fast MLP.
+- [x] Integrate all systems into `training/train_pipeline.py`.
+- [x] Build `training/cpcv_validation.py` to structure strict Out-Of-Sample embargo windows.
+- [x] Build `deployment/export_to_onnx.py` & `deployment/live_inference.py`.
+
+### **Active Objective:**
+Execute the data pipeline on Google Colab to build the `master_training_tensor.parquet` and begin PyTorch optimization.
+
+### **Next Steps (Queue):**
+1. Upload manual OHLC exports to Google Colab.
+2. Run `build_features.py` logic to create the master tensor.
+3. Execute `train_pipeline.py` leveraging CPCV firewalls.
+
+### **Current Project State:**
+*   **Phase:** 6 - Data Preprocessing & Auto-Resampling
+*   **Status:** Automated 1m-to-MTF feature processor implemented in `data/build_features.py`. The engine now accepts a single 1m dataset and auto-generates 15m, 30m, 1H, and 4H spatial tensors with session levels (Asia/London/PDH/PDL).
+*   **Active Commit:** `feat(data): add automated 1m dataset resampler and session level extractor to build_features.py`
+
+### **Completed Tasks:**
+- [x] Implement ATR-scaled volatility normalization and wick-to-body spatial mapping.
+- [x] Build automated 1m data resampler for 15m, 30m, 1H, and 4H channels.
+- [x] Implement Asian High/Low, London High/Low, PDH/PDL, and Daily Pivot distance extraction.
+- [x] Build `envs/xau_mtf_env.py` using `gymnasium.spaces.Dict`.
+- [x] Build `models/oracle_transformer.py` using Multi-Timeframe Experts.
+- [x] Build `models/gatekeeper_hmm.py` for physical Regime Detection filtering.
+- [x] Build `models/manager_sac.py` using a fast MLP.
+- [x] Integrate all systems into `training/train_pipeline.py`.
+- [x] Build `training/cpcv_validation.py` to structure strict Out-Of-Sample embargo windows.
+- [x] Build `deployment/export_to_onnx.py` & `deployment/live_inference.py`.
+
+### **Active Objective:**
+Upload the raw 1m CSV/Parquet file to Google Colab and run the automated preprocessing script to begin training.
