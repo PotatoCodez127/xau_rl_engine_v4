@@ -82,3 +82,23 @@ Construct the Risk Manager (Soft Actor-Critic) to bridge the Oracle's prediction
 1. Build `models/manager_sac.py` to route the Oracle's outputs to the bounded execution space.
 2. Integrate the Tri-Brain system into the Gymnasium step loop.
 3. Construct the `train_pipeline.py`.
+
+### **Current Project State:**
+*   **Phase:** 3 - Neural Architecture (The Risk Manager)
+*   **Status:** All three brain components (Oracle Transformer, Gatekeeper HMM, Manager SAC) are now fully architected in PyTorch.
+*   **Active Commit:** `feat(models): implement manager_sac.py with MLP architecture for decoupled volumetric sizing and asymmetric bounds`
+
+### **Completed Tasks:**
+- [x] Implement ATR-scaled volatility normalization and $\tanh$ squashing.
+- [x] Build `envs/xau_mtf_env.py` using `gymnasium.spaces.Dict`.
+- [x] Build `models/oracle_transformer.py` using Multi-Timeframe Experts.
+- [x] Build `models/gatekeeper_hmm.py` for physical Regime Detection filtering.
+- [x] Build `models/manager_sac.py` using a fast MLP, preventing LSTM gradient instability and cognitive overload.
+
+### **Active Objective:**
+Merge the Oracle, Gatekeeper, and Manager into a unified training pipeline.
+
+### **Next Steps (Queue):**
+1. Build `training/train_pipeline.py` to synchronize the outputs of the three brains.
+2. Build `training/cpcv_validation.py` for Combinatorial Purged Cross-Validation.
+3. Prepare ONNX export scripts for edge deployment.
