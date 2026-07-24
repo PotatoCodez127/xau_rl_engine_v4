@@ -234,3 +234,23 @@ Execute the data pipeline on Google Colab to build the `master_training_tensor.p
 
 ### **Active Objective:**
 Upload the raw 1m CSV/Parquet file to Google Colab and run the automated preprocessing script to begin training.
+
+### **Current Project State:**
+*   **Phase:** 7 - Pre-Deployment Testing & Validation
+*   **Status:** Pytest suite populated covering feature scaling bounds, neural network output matrices, and CPCV data leakage firewalls.
+*   **Active Commit:** `test: populate pytest suite for feature generator, tri-brain models, and cpcv firewall`
+
+### **Completed Tasks:**
+- [x] Implement ATR-scaled volatility normalization and wick-to-body spatial mapping.
+- [x] Build automated 1m data resampler for 15m, 30m, 1H, and 4H channels.
+- [x] Build `envs/xau_mtf_env.py` using `gymnasium.spaces.Dict`.
+- [x] Build `models/oracle_transformer.py` using Multi-Timeframe Experts.
+- [x] Build `models/gatekeeper_hmm.py` for physical Regime Detection filtering.
+- [x] Build `models/manager_sac.py` using a fast MLP.
+- [x] Integrate all systems into `training/train_pipeline.py`.
+- [x] Build `training/cpcv_validation.py` to structure strict Out-Of-Sample embargo windows.
+- [x] Build `deployment/export_to_onnx.py` & `deployment/live_inference.py`.
+- [x] Populate `tests/` directory with `pytest` modules to mathematically validate models and features.
+
+### **Active Objective:**
+Run `pytest` locally to confirm architecture integrity, then upload the 1m dataset to Google Colab for the final training run.
