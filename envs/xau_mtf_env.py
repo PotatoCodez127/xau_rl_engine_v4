@@ -135,8 +135,8 @@ class XAUMTFEnv(gym.Env):
         transaction_cost = position_delta * 0.00015 # Simulated roughly 1.5 pips penalty for switching bias
         
         # 3. Dense Reward Engineering (PnL)
-        # Calculate percent change of price
-        price_change = (current_price - prev_price) / prev_price
+        # Fix: Use absolute delta for normalized features to prevent DivByZero
+        price_change = current_price - prev_price
         
         # Gross step PnL = Our Position Size * Price Change
         step_pnl = self.position * price_change
