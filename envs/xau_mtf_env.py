@@ -131,11 +131,28 @@ class XAUMTFEnv(gym.Env):
             elif tp_hit:
                 self.position = 0.0
                 
-            # Convert final PnL to Pips for the Agent's Reward
             realized_pips = self.unrealized_pnl / self.PIP_SCALAR
             
-            # Reward is Pips divided by 10 to keep neural net gradients stable
-            reward = realized_pips / 10.0 
+            # ==========================================
+            # THE "COWARD'S TAX" REWARD ENGINEERING
+            # ==========================================
+            if tp_hit:
+                # Jackpot: Full pip reward + a 1.0 completion bonus
+                reward = (realized_pips / 10.0) + 1.0 
+            elif sl_hit:
+                # Clean loss: Standard penalty based on pips lost
+                reward = (realized_pips / 10.0)
+            elif network_exit:
+                if realized_pips >= 15.0:
+                    # Coward's Tax: Bailing early in profit cuts the reward in half
+                    reward = (realized_pips / 10.0) * 0.5 
+                elif realized_pips > 0.0 and realized_pips < 15.0:
+                    # Noise Zone: Bailing on microscopic profits yields nothing
+                    reward = 0.0
+                else:
+                    # Loss Mitigation: Cutting a losing trade early avoids the full SL penalty
+                    reward = (realized_pips / 10.0)
+                    
             self.unrealized_pnl = 0.0
 
         else:
