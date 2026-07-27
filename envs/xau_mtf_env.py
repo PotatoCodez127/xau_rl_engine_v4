@@ -3,178 +3,128 @@ from gymnasium import spaces
 import numpy as np
 import pandas as pd
 
-
-class XAUMultiTimeframeEnv(gym.Env):
+class XAUMTFEnv(gym.Env):
     """
-    Tri-Brain XAUUSD MTF Gym Environment (Version 4 - Hard Lock Edition)
-    
-    Physics & Market Calibrations:
-    - Pip Math: $0.10 price movement = 1.0 pip.
-    - Spread Friction: 2.0 pips ($0.20) per new entry / flip.
-    - Target Scaling: TP = 40 to 100 pips, SL = 20 to 50 pips.
-    - Hard Lock: Once entered, positions CANNOT exit to FLAT manually.
-      Exits occur ONLY via TP, SL, or Directional Flip.
+    Tri-Brain XAUUSD MTF Gym Environment (Bulletproof Hard Lock Edition)
     """
     metadata = {'render.modes': ['human']}
 
-    def __init__(self, df: pd.DataFrame, feature_cols: list):
-        super(XAUMultiTimeframeEnv, self).__init__()
+    def __init__(self, mtf_dict, max_steps=None):
+        super(XAUMTFEnv, self).__init__()
+        self.mtf_dict = mtf_dict
+        self.data_15m = self.mtf_dict["15m"].values if hasattr(self.mtf_dict["15m"], "values") else self.mtf_dict["15m"]
+        self.total_steps = len(self.data_15m)
+        self.max_steps = max_steps if max_steps else self.total_steps
         
-        self.df = df.reset_index(drop=True)
-        self.feature_cols = feature_cols
-        self.num_samples = len(self.df)
-        
-        # Action Space: [direction_vol (-1 to 1), k_tp (-1 to 1), k_sl (-1 to 1)]
-        self.action_space = spaces.Box(
-            low=-1.0, high=1.0, shape=(3,), dtype=np.float32
-        )
-        
-        # Observation Space matching feature matrix
-        self.observation_space = spaces.Box(
-            low=-np.inf, high=np.inf, shape=(len(feature_cols),), dtype=np.float32
-        )
-        
-        # State tracking
-        self.current_step = 0
-        self.position = 0.0       # 0.0 = Flat, 1.0 = Long, -1.0 = Short
-        self.entry_price = 0.0
-        self.tp_price = 0.0
-        self.sl_price = 0.0
-        self.trade_duration = 0
+        self.action_space = spaces.Box(low=-1.0, high=1.0, shape=(3,), dtype=np.float32)
+        self.observation_space = spaces.Dict({
+            "15m": spaces.Box(low=-10, high=10, shape=(128, 11), dtype=np.float32),
+            "30m": spaces.Box(low=-10, high=10, shape=(64, 11), dtype=np.float32),
+            "1H": spaces.Box(low=-10, high=10, shape=(32, 11), dtype=np.float32),
+            "4H": spaces.Box(low=-10, high=10, shape=(16, 11), dtype=np.float32),
+            "state": spaces.Box(low=-100, high=100, shape=(4,), dtype=np.float32)
+        })
+
+        self.PIP_SCALAR = 0.10
+        self.SPREAD_PIPS = 2.0
+        self.CONVICTION_THRESHOLD = 0.60
+        self.reset()
 
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
-        self.current_step = 0
+        self.current_step = 128
         self.position = 0.0
         self.entry_price = 0.0
-        self.tp_price = 0.0
-        self.sl_price = 0.0
-        self.trade_duration = 0
-        
-        obs = self.df.iloc[self.current_step][self.feature_cols].values.astype(np.float32)
-        return obs, {}
+        self.unrealized_pnl = 0.0
+        self.cooldown = 0
+        return self._get_obs(), {}
 
-    def _calculate_targets(self, current_price: float, position: float, raw_ktp: float, raw_ksl: float):
-        """Scales continuous network outputs to pip-based price targets."""
-        # Map raw [-1, 1] to pip ranges: TP [40, 100], SL [20, 50]
-        tp_pips = 40.0 + ((raw_ktp + 1.0) / 2.0) * 60.0
-        sl_pips = 20.0 + ((raw_ksl + 1.0) / 2.0) * 30.0
-        
-        # 1 Pip = $0.10 delta on XAUUSD
-        tp_delta = tp_pips * 0.10
-        sl_delta = sl_pips * 0.10
-        
-        if position == 1.0: # LONG
-            tp_price = current_price + tp_delta
-            sl_price = current_price - sl_delta
-        else: # SHORT
-            tp_price = current_price - tp_delta
-            sl_price = current_price + sl_delta
-            
-        return tp_price, sl_price
+    def _slice_tf(self, tf, length):
+        data = self.mtf_dict[tf]
+        if hasattr(data, "values"): data = data.values
+        idx = min(self.current_step, len(data))
+        if idx < length:
+            pad = np.zeros((length - idx, 11), dtype=np.float32)
+            return np.vstack([pad, data[:idx]]).astype(np.float32)
+        return data[idx - length : idx].astype(np.float32)
 
-    def step(self, action: np.ndarray):
-        direction_vol, raw_ktp, raw_ksl = action[0], action[1], action[2]
+    def _get_obs(self):
+        state_vec = np.array([self.position, 1.0, self.unrealized_pnl, self.cooldown], dtype=np.float32)
+        return {
+            "15m": self._slice_tf("15m", 128), "30m": self._slice_tf("30m", 64),
+            "1H": self._slice_tf("1H", 32), "4H": self._slice_tf("4H", 16),
+            "state": state_vec
+        }
+
+    def step(self, action):
+        current_price = self.data_15m[self.current_step, 3] 
+        raw_direction = action[0]
+        k_tp = (action[1] + 1.0) / 2.0 
+        k_sl = (action[2] + 1.0) / 2.0 
         
-        current_row = self.df.iloc[self.current_step]
-        high_price = current_row['high']
-        low_price = current_row['low']
-        close_price = current_row['close']
+        # 1. Snapshot State
+        prev_pos = self.position
         
+        # 2. Process Unrealized PnL strictly using OLD entry price
+        if prev_pos != 0.0:
+            raw_pnl = prev_pos * (current_price - self.entry_price)
+            self.unrealized_pnl = raw_pnl - (self.SPREAD_PIPS * self.PIP_SCALAR)
+        else:
+            self.unrealized_pnl = 0.0
+
+        # 3. Dynamic Targets
+        sl_pips = 20.0 + (k_sl * 30.0)
+        target_sl = -1.0 * (sl_pips * self.PIP_SCALAR)
+        tp_pips = 40.0 + (k_tp * 60.0)
+        target_tp = tp_pips * self.PIP_SCALAR
+
+        sl_hit = (prev_pos != 0.0) and (self.unrealized_pnl <= target_sl)
+        tp_hit = (prev_pos != 0.0) and (self.unrealized_pnl >= target_tp)
+
+        # 4. Intended Actions (The Hard Lock: No Flat Exits)
+        target_pos = prev_pos
+        if self.cooldown > 0:
+            self.cooldown -= 1
+        else:
+            if prev_pos == 0.0:
+                if raw_direction > self.CONVICTION_THRESHOLD: target_pos = 1.0
+                elif raw_direction < -self.CONVICTION_THRESHOLD: target_pos = -1.0
+            elif prev_pos > 0.0:
+                if raw_direction < -self.CONVICTION_THRESHOLD: target_pos = -1.0
+            elif prev_pos < 0.0:
+                if raw_direction > self.CONVICTION_THRESHOLD: target_pos = 1.0
+
+        # 5. Evaluate Closure
+        trade_closed, reason = False, ""
+        if sl_hit:
+            trade_closed, reason = True, "Stop Loss"
+            target_pos, self.cooldown = 0.0, 5
+        elif tp_hit:
+            trade_closed, reason = True, "Take Profit"
+            target_pos = 0.0
+        elif prev_pos != 0.0 and target_pos != prev_pos:
+            trade_closed, reason = True, "Network Flip"
+
+        # 6. Distribute Rewards BEFORE modifying Entry Price
         reward = 0.0
-        terminated = False
+        if trade_closed:
+            realized_pips = self.unrealized_pnl / self.PIP_SCALAR
+            if reason == "Take Profit":
+                reward = (realized_pips / 10.0) + 2.0 # TP Completion Bonus
+            elif reason in ["Stop Loss", "Network Flip"]:
+                reward = (realized_pips / 10.0)
+            self.unrealized_pnl = 0.0
+        else:
+            if prev_pos == 0.0: reward = -0.01
+
+        # 7. Finalize Setup for Next Step
+        if target_pos != 0.0 and target_pos != prev_pos:
+            self.entry_price = current_price
+            
+        self.position = target_pos
+        self.current_step += 1
+        
+        terminated = self.current_step >= self.max_steps - 1
         truncated = False
         
-        # ------------------------------------------------------------------
-        # 1. CHECK TP / SL ON ACTIVE POSITION
-        # ------------------------------------------------------------------
-        if self.position == 1.0: # LONG
-            if high_price >= self.tp_price:
-                realized_pips = (self.tp_price - self.entry_price) / 0.10
-                reward = (realized_pips / 10.0) + 2.0 # Reward + TP Bonus
-                self.position = 0.0
-                self.entry_price = 0.0
-            elif low_price <= self.sl_price:
-                realized_pips = (self.sl_price - self.entry_price) / 0.10
-                reward = realized_pips / 10.0
-                self.position = 0.0
-                self.entry_price = 0.0
-
-        elif self.position == -1.0: # SHORT
-            if low_price <= self.tp_price:
-                realized_pips = (self.entry_price - self.tp_price) / 0.10
-                reward = (realized_pips / 10.0) + 2.0 # Reward + TP Bonus
-                self.position = 0.0
-                self.entry_price = 0.0
-            elif high_price >= self.sl_price:
-                realized_pips = (self.entry_price - self.sl_price) / 0.10
-                reward = realized_pips / 10.0
-                self.position = 0.0
-                self.entry_price = 0.0
-
-        # ------------------------------------------------------------------
-        # 2. HARD LOCK DIRECTIONAL LOGIC & FLIPS
-        # ------------------------------------------------------------------
-        if self.position == 0.0:
-            # Out of market: Look for new entries with > 0.60 conviction
-            if direction_vol > 0.60:
-                self.position = 1.0
-                self.entry_price = close_price
-                self.tp_price, self.sl_price = self._calculate_targets(close_price, 1.0, raw_ktp, raw_ksl)
-                reward -= 0.20 # 2.0 Pip Spread Penalty (Scaled)
-                self.trade_duration = 0
-            elif direction_vol < -0.60:
-                self.position = -1.0
-                self.entry_price = close_price
-                self.tp_price, self.sl_price = self._calculate_targets(close_price, -1.0, raw_ktp, raw_ksl)
-                reward -= 0.20 # 2.0 Pip Spread Penalty (Scaled)
-                self.trade_duration = 0
-
-        elif self.position == 1.0:
-            # HARD LOCK: Neutral signals keep LONG position open
-            if direction_vol < -0.60:
-                # Directional Flip to SHORT: Close LONG first, then open SHORT
-                exit_pips = (close_price - self.entry_price) / 0.10 - 2.0 # Deduct 2-pip spread
-                reward += exit_pips / 10.0
-                
-                # Open new SHORT
-                self.position = -1.0
-                self.entry_price = close_price
-                self.tp_price, self.sl_price = self._calculate_targets(close_price, -1.0, raw_ktp, raw_ksl)
-                reward -= 0.20 # Spread Penalty for new entry
-                self.trade_duration = 0
-            else:
-                self.trade_duration += 1
-
-        elif self.position == -1.0:
-            # HARD LOCK: Neutral signals keep SHORT position open
-            if direction_vol > 0.60:
-                # Directional Flip to LONG: Close SHORT first, then open LONG
-                exit_pips = (self.entry_price - close_price) / 0.10 - 2.0 # Deduct 2-pip spread
-                reward += exit_pips / 10.0
-                
-                # Open new LONG
-                self.position = 1.0
-                self.entry_price = close_price
-                self.tp_price, self.sl_price = self._calculate_targets(close_price, 1.0, raw_ktp, raw_ksl)
-                reward -= 0.20 # Spread Penalty for new entry
-                self.trade_duration = 0
-            else:
-                self.trade_duration += 1
-
-        # ------------------------------------------------------------------
-        # 3. ADVANCE TIMESTEP & STEP OUTPUT
-        # ------------------------------------------------------------------
-        self.current_step += 1
-        if self.current_step >= self.num_samples - 1:
-            terminated = True
-            
-        next_obs = self.df.iloc[self.current_step][self.feature_cols].values.astype(np.float32)
-        info = {
-            'position': self.position,
-            'entry_price': self.entry_price,
-            'tp_price': self.tp_price,
-            'sl_price': self.sl_price
-        }
-        
-        return next_obs, reward, terminated, truncated, info
+        return self._get_obs(), reward, terminated, truncated, {}

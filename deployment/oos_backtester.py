@@ -47,6 +47,21 @@ def run_backtest():
 
     for i in range(128, len(test_idx)):
         idx = test_idx[i]
+        
+        # FIX: Detect CPCV fold gaps and force-close phantom trades
+        if i > 128 and idx != test_idx[i-1] + 1:
+            if position != 0.0:
+                realized = unrealized_pnl * 100.0
+                equity += realized
+                trade_log.append({
+                    "Step": test_idx[i-1], "Direction": "LONG" if position > 0 else "SHORT",
+                    "PnL": round(realized, 2), "Pips": round(unrealized_pnl / PIP_SCALAR, 2),
+                    "Reason": "Fold Gap Close", "Equity": round(equity, 2)
+                })
+                unrealized_pnl = 0.0
+                position = 0.0
+                cooldown = 0
+                
         data_15m = mtf_dict["15m"].values if hasattr(mtf_dict["15m"], "iloc") else mtf_dict["15m"]
         current_price = data_15m[idx, 3] 
         
@@ -74,7 +89,6 @@ def run_backtest():
         # ==========================================
         prev_pos = position
         
-        # Safely calculate distance based on the position we held coming into this candle
         if prev_pos != 0.0:
             raw_pnl = prev_pos * (current_price - entry_price)
             unrealized_pnl = raw_pnl - (SPREAD_PIPS * PIP_SCALAR)
@@ -88,7 +102,7 @@ def run_backtest():
         tp_hit = (prev_pos != 0.0) and (unrealized_pnl >= target_tp)
 
         # ==========================================
-        # OPTION B: INTRADAY CONVICTION (WITH FLAT EXITS)
+        # THE HARD LOCK EXECUTION LOGIC
         # ==========================================
         target_pos = prev_pos
         if cooldown > 0:
@@ -99,10 +113,8 @@ def run_backtest():
                 elif direction_vol < -CONVICTION_THRESHOLD: target_pos = -1.0
             elif prev_pos > 0.0:
                 if direction_vol < -CONVICTION_THRESHOLD: target_pos = -1.0
-                elif direction_vol < 0.0: target_pos = 0.0 # Network Exit (Flat) Allowed!
             elif prev_pos < 0.0:
                 if direction_vol > CONVICTION_THRESHOLD: target_pos = 1.0
-                elif direction_vol > 0.0: target_pos = 0.0 # Network Exit (Flat) Allowed!
 
         # ==========================================
         # TRADE CLOSURE EVALUATION
@@ -114,8 +126,6 @@ def run_backtest():
         elif tp_hit:
             trade_closed, reason = True, "Take Profit"
             target_pos = 0.0
-        elif prev_pos != 0.0 and target_pos == 0.0:
-            trade_closed, reason = True, "Network Exit"
         elif prev_pos != 0.0 and target_pos != prev_pos:
             trade_closed, reason = True, "Network Flip"
 
@@ -156,14 +166,26 @@ def run_backtest():
     wins = len(log_df[log_df["PnL"] > 0]) if not log_df.empty else 0
     total_trades = len(log_df)
     win_rate = (wins / total_trades) * 100 if total_trades > 0 else 0
+    
+    gross_profit = log_df[log_df["PnL"] > 0]["PnL"].sum() if not log_df.empty else 0
+    gross_loss = abs(log_df[log_df["PnL"] <= 0]["PnL"].sum()) if not log_df.empty else 0
+    profit_factor = gross_profit / gross_loss if gross_loss > 0 else float('inf')
 
     print("\n" + "="*40)
     print("📈 OUT-OF-SAMPLE TEAR SHEET (PATH 15)")
     print("="*40)
     print(f"Total Trades:   {total_trades}")
     print(f"Win Rate:       {win_rate:.2f}%")
+    print(f"Profit Factor:  {profit_factor:.2f}")
     print(f"Final Equity:   ${equity:.2f}")
     print("="*40)
+
+    plt.plot(equity_curve)
+    plt.title("OOS Equity Curve (Path 15 - Hard Lock)")
+    plt.ylabel("Account Balance ($)")
+    plt.xlabel("Steps")
+    plt.grid()
+    plt.show()
 
 if __name__ == "__main__":
     run_backtest()
