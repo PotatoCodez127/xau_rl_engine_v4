@@ -3,23 +3,14 @@ from gym import spaces
 import numpy as np
 
 class XAUMTFEnv(gym.Env):
-    """
-    Multi-Timeframe reinforcement learning environment for Gold (XAUUSD).
-    Calibrated with realistic Pip physics, spread, and Intraday conviction rules.
-    """
     def __init__(self, mtf_dict, max_steps=None):
         super(XAUMTFEnv, self).__init__()
-        
         self.mtf_dict = mtf_dict
         self.data_15m = self.mtf_dict["15m"].values if hasattr(self.mtf_dict["15m"], "values") else self.mtf_dict["15m"]
-        
         self.total_steps = len(self.data_15m)
         self.max_steps = max_steps if max_steps else self.total_steps
         
-        # Action Space: [Direction_Vol, k_tp, k_sl] all bounded [-1.0, 1.0]
         self.action_space = spaces.Box(low=-1.0, high=1.0, shape=(3,), dtype=np.float32)
-        
-        # State Space Observation limits (Dummy high values for bounds)
         self.observation_space = spaces.Dict({
             "15m": spaces.Box(low=-10, high=10, shape=(128, 11), dtype=np.float32),
             "30m": spaces.Box(low=-10, high=10, shape=(64, 11), dtype=np.float32),
@@ -28,28 +19,22 @@ class XAUMTFEnv(gym.Env):
             "state": spaces.Box(low=-100, high=100, shape=(4,), dtype=np.float32)
         })
 
-        # Market Physics Constants
         self.PIP_SCALAR = 0.10
         self.SPREAD_PIPS = 2.0
         self.CONVICTION_THRESHOLD = 0.60
-        
         self.reset()
 
     def reset(self):
-        # Start far enough into the data to have full historical windows
         self.current_step = 128
         self.position = 0.0
         self.entry_price = 0.0
         self.unrealized_pnl = 0.0
         self.cooldown = 0
-        
         return self._get_obs()
 
     def _slice_tf(self, tf, length):
         data = self.mtf_dict[tf]
-        if hasattr(data, "values"):
-            data = data.values
-            
+        if hasattr(data, "values"): data = data.values
         idx = min(self.current_step, len(data))
         if idx < length:
             pad = np.zeros((length - idx, 11), dtype=np.float32)
@@ -59,110 +44,78 @@ class XAUMTFEnv(gym.Env):
     def _get_obs(self):
         state_vec = np.array([self.position, 1.0, self.unrealized_pnl, self.cooldown], dtype=np.float32)
         return {
-            "15m": self._slice_tf("15m", 128),
-            "30m": self._slice_tf("30m", 64),
-            "1H": self._slice_tf("1H", 32),
-            "4H": self._slice_tf("4H", 16),
+            "15m": self._slice_tf("15m", 128), "30m": self._slice_tf("30m", 64),
+            "1H": self._slice_tf("1H", 32), "4H": self._slice_tf("4H", 16),
             "state": state_vec
         }
 
     def step(self, action):
-        current_price = self.data_15m[self.current_step, 3] # Close price
-        
+        current_price = self.data_15m[self.current_step, 3] 
         raw_direction = action[0]
-        k_tp = (action[1] + 1.0) / 2.0 # Scale to [0, 1]
-        k_sl = (action[2] + 1.0) / 2.0 # Scale to [0, 1]
+        k_tp = (action[1] + 1.0) / 2.0 
+        k_sl = (action[2] + 1.0) / 2.0 
         
+        # 1. Snapshot State
         prev_pos = self.position
         
-        # 1. Intraday Conviction Logic
+        # 2. Process Unrealized PnL strictly using OLD entry price
+        if prev_pos != 0.0:
+            raw_pnl = prev_pos * (current_price - self.entry_price)
+            self.unrealized_pnl = raw_pnl - (self.SPREAD_PIPS * self.PIP_SCALAR)
+        else:
+            self.unrealized_pnl = 0.0
+
+        # 3. Dynamic Targets
+        sl_pips = 20.0 + (k_sl * 30.0)
+        target_sl = -1.0 * (sl_pips * self.PIP_SCALAR)
+        tp_pips = 40.0 + (k_tp * 60.0)
+        target_tp = tp_pips * self.PIP_SCALAR
+
+        sl_hit = (prev_pos != 0.0) and (self.unrealized_pnl <= target_sl)
+        tp_hit = (prev_pos != 0.0) and (self.unrealized_pnl >= target_tp)
+
+        # 4. Intended Actions (The Hard Lock: No Flat Exits)
+        target_pos = prev_pos
         if self.cooldown > 0:
             self.cooldown -= 1
         else:
-            if self.position == 0.0:
-                if raw_direction > self.CONVICTION_THRESHOLD:
-                    self.position = 1.0
-                    self.entry_price = current_price
-                elif raw_direction < -self.CONVICTION_THRESHOLD:
-                    self.position = -1.0
-                    self.entry_price = current_price
-            elif self.position > 0.0:
-                if raw_direction < -self.CONVICTION_THRESHOLD:
-                    self.position = -1.0
-                    self.entry_price = current_price
-                elif raw_direction < 0.0:
-                    self.position = 0.0
-            elif self.position < 0.0:
-                if raw_direction > self.CONVICTION_THRESHOLD:
-                    self.position = 1.0
-                    self.entry_price = current_price
-                elif raw_direction > 0.0:
-                    self.position = 0.0
+            if prev_pos == 0.0:
+                if raw_direction > self.CONVICTION_THRESHOLD: target_pos = 1.0
+                elif raw_direction < -self.CONVICTION_THRESHOLD: target_pos = -1.0
+            elif prev_pos > 0.0:
+                if raw_direction < -self.CONVICTION_THRESHOLD: target_pos = -1.0
+            elif prev_pos < 0.0:
+                if raw_direction > self.CONVICTION_THRESHOLD: target_pos = 1.0
 
-        # 2. Friction and Real-World Spread
-        pos_delta = abs(self.position - prev_pos)
-        transaction_cost_price = pos_delta * (self.SPREAD_PIPS * self.PIP_SCALAR)
-        
-        if prev_pos != 0.0:
-            step_pnl = prev_pos * (current_price - self.entry_price)
-            self.unrealized_pnl = step_pnl - transaction_cost_price
-        else:
-            self.unrealized_pnl = 0.0
+        # 5. Evaluate Closure
+        trade_closed, reason = False, ""
+        if sl_hit:
+            trade_closed, reason = True, "Stop Loss"
+            target_pos, self.cooldown = 0.0, 5
+        elif tp_hit:
+            trade_closed, reason = True, "Take Profit"
+            target_pos = 0.0
+        elif prev_pos != 0.0 and target_pos != prev_pos:
+            trade_closed, reason = True, "Network Flip"
 
-        # 3. Dynamic Stop Loss & Take Profit logic
-        sl_pips = 20.0 + (k_sl * 30.0)
-        target_sl_price_dist = -1.0 * (sl_pips * self.PIP_SCALAR)
-
-        tp_pips = 40.0 + (k_tp * 60.0)
-        target_tp_price_dist = tp_pips * self.PIP_SCALAR
-
-        sl_hit = (prev_pos != 0.0) and (self.unrealized_pnl <= target_sl_price_dist)
-        tp_hit = (prev_pos != 0.0) and (self.unrealized_pnl >= target_tp_price_dist)
-        network_exit = (self.position == 0.0 and prev_pos != 0.0)
-        
+        # 6. Distribute Rewards BEFORE modifying Entry Price
         reward = 0.0
-        trade_closed = False
-        
-        if sl_hit or tp_hit or network_exit:
-            trade_closed = True
-            if sl_hit:
-                self.position = 0.0
-                self.cooldown = 5
-            elif tp_hit:
-                self.position = 0.0
-                
+        if trade_closed:
             realized_pips = self.unrealized_pnl / self.PIP_SCALAR
-            
-            # ==========================================
-            # THE "COWARD'S TAX" REWARD ENGINEERING
-            # ==========================================
-            if tp_hit:
-                # Jackpot: Full pip reward + a 1.0 completion bonus
-                reward = (realized_pips / 10.0) + 1.0 
-            elif sl_hit:
-                # Clean loss: Standard penalty based on pips lost
+            if reason == "Take Profit":
+                reward = (realized_pips / 10.0) + 2.0 # TP Completion Bonus
+            elif reason in ["Stop Loss", "Network Flip"]:
                 reward = (realized_pips / 10.0)
-            elif network_exit:
-                if realized_pips >= 15.0:
-                    # Coward's Tax: Bailing early in profit cuts the reward in half
-                    reward = (realized_pips / 10.0) * 0.5 
-                elif realized_pips > 0.0 and realized_pips < 15.0:
-                    # Noise Zone: Bailing on microscopic profits yields nothing
-                    reward = 0.0
-                else:
-                    # Loss Mitigation: Cutting a losing trade early avoids the full SL penalty
-                    reward = (realized_pips / 10.0)
-                    
             self.unrealized_pnl = 0.0
-
         else:
-            # Small inactivity penalty to encourage finding trades
-            if self.position == 0.0:
-                reward = -0.01
+            if prev_pos == 0.0: reward = -0.01
 
-        # 4. Step Environment Forward
+        # 7. Finalize Setup for Next Step
+        if target_pos != 0.0 and target_pos != prev_pos:
+            self.entry_price = current_price
+            
+        self.position = target_pos
         self.current_step += 1
         done = self.current_step >= self.max_steps - 1
         
-        obs = self._get_obs()
-        return obs, reward, done, {}
+        return self._get_obs(), reward, done, {}
