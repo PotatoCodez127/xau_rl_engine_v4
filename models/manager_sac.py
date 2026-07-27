@@ -3,14 +3,8 @@ import torch.nn as nn
 from torch.distributions import Normal
 
 class SACActor(nn.Module):
-    """
-    The Risk Manager (Actor).
-    Observes Oracle probabilities and current execution state to dictate sizing and risk[cite: 1].
-    Outputs bounded actions via Tanh to enforce Asymmetric Action Spaces[cite: 1, 3].
-    """
     def __init__(self, oracle_dim: int = 3, state_dim: int = 4, action_dim: int = 3, hidden_dim: int = 256):
         super(SACActor, self).__init__()
-        
         input_dim = oracle_dim + state_dim
         
         self.net = nn.Sequential(
@@ -20,7 +14,6 @@ class SACActor(nn.Module):
             nn.ReLU()
         )
         
-        # SAC requires mean and log_std for continuous action distributions
         self.mean_layer = nn.Linear(hidden_dim, action_dim)
         self.log_std_layer = nn.Linear(hidden_dim, action_dim)
         
@@ -30,22 +23,18 @@ class SACActor(nn.Module):
         
         mean = self.mean_layer(x)
         log_std = self.log_std_layer(x)
-        # Clamp log_std to prevent numerical instability
         log_std = torch.clamp(log_std, min=-20, max=2)
-        
         return mean, log_std
         
     def sample_action(self, oracle_probs: torch.Tensor, env_state: torch.Tensor):
-        """Samples an action and calculates its log probability for Entropy Maximization."""
         mean, log_std = self.forward(oracle_probs, env_state)
         std = log_std.exp()
         
         normal = Normal(mean, std)
-        x_t = normal.rsample()  # Reparameterization trick
-        y_t = torch.tanh(x_t)   # Enforce bounds [-1, 1]
+        x_t = normal.rsample()  
+        y_t = torch.tanh(x_t)   
         
         action = y_t
-        # Enforcing bounding requires adjusting the log probability
         log_prob = normal.log_prob(x_t)
         log_prob -= torch.log(1 - y_t.pow(2) + 1e-6)
         log_prob = log_prob.sum(1, keepdim=True)
@@ -53,16 +42,10 @@ class SACActor(nn.Module):
         return action, log_prob
 
 class SACCritic(nn.Module):
-    """
-    The Risk Evaluator (Critic).
-    Evaluates the Q-value of the state-action pair to guide the Actor.
-    """
     def __init__(self, oracle_dim: int = 3, state_dim: int = 4, action_dim: int = 3, hidden_dim: int = 256):
         super(SACCritic, self).__init__()
-        
         input_dim = oracle_dim + state_dim + action_dim
         
-        # Twin Q-Networks to mitigate overestimation bias
         self.q1_net = nn.Sequential(
             nn.Linear(input_dim, hidden_dim),
             nn.ReLU(),
@@ -84,6 +67,23 @@ class SACCritic(nn.Module):
         q1 = self.q1_net(x)
         q2 = self.q2_net(x)
         return q1, q2
+
+class EntropyTuner(nn.Module):
+    """
+    Automatically tunes the SAC entropy coefficient to prevent execution paralysis.
+    """
+    def __init__(self, action_dim: int = 3, lr: float = 1e-4):
+        super(EntropyTuner, self).__init__()
+        self.target_entropy = -float(action_dim)
+        self.log_alpha = nn.Parameter(torch.zeros(1, requires_grad=True))
+        self.optimizer = torch.optim.Adam([self.log_alpha], lr=lr)
+
+    def update(self, log_pi: torch.Tensor):
+        alpha_loss = -(self.log_alpha * (log_pi + self.target_entropy).detach()).mean()
+        self.optimizer.zero_grad()
+        alpha_loss.backward()
+        self.optimizer.step()
+        return alpha_loss.item(), self.log_alpha.exp().item()
 
 if __name__ == "__main__":
     # Smoke Test
