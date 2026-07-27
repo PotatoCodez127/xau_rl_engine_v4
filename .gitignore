@@ -3,3 +3,5 @@ tests/
 __pycache__/
 data/XAUUSD_1M.csv
 *.pkl
+*.onnx
+*.onnx.data
