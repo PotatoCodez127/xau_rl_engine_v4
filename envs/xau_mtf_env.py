@@ -32,7 +32,9 @@ class XAUMTFEnv(gym.Env):
 
         self.PIP_SCALAR = 0.10
         self.SPREAD_PIPS = 2.0
-        self.CONVICTION_THRESHOLD = 0.30
+        self.CONVICTION_THRESHOLD = 0.55
+        self.POST_TRADE_COOLDOWN = 12
+        self.MAX_HOLD_BARS = 32
         self.reset()
 
     def reset(self, seed=None, options=None):
@@ -87,9 +89,10 @@ class XAUMTFEnv(gym.Env):
         target_sl = -1.0 * ((20.0 + (k_sl * 30.0)) * self.PIP_SCALAR)
         target_tp = (40.0 + (k_tp * 60.0)) * self.PIP_SCALAR
 
+        # Check trade closure triggers
         sl_hit = (prev_pos != 0.0) and (self.unrealized_pnl <= target_sl)
         tp_hit = (prev_pos != 0.0) and (self.unrealized_pnl >= target_tp)
-        time_stop_hit = (prev_pos != 0.0) and (self.bars_in_trade >= 96) # Hard stop after 24 hours (96 15m bars)
+        time_stop_hit = (prev_pos != 0.0) and (self.bars_in_trade >= self.MAX_HOLD_BARS)
 
         target_pos = prev_pos
         if self.cooldown > 0:
@@ -106,16 +109,18 @@ class XAUMTFEnv(gym.Env):
         trade_closed, reason = False, ""
         if sl_hit:
             trade_closed, reason = True, "Stop Loss"
-            target_pos, self.cooldown = 0.0, 5
+            target_pos, self.cooldown = 0.0, self.POST_TRADE_COOLDOWN
         elif tp_hit:
             trade_closed, reason = True, "Take Profit"
-            target_pos = 0.0
+            target_pos, self.cooldown = 0.0, self.POST_TRADE_COOLDOWN
         elif time_stop_hit:
             trade_closed, reason = True, "Time Stop"
-            target_pos, self.cooldown = 0.0, 5
+            target_pos, self.cooldown = 0.0, self.POST_TRADE_COOLDOWN
         elif prev_pos != 0.0 and target_pos != prev_pos:
             trade_closed, reason = True, "Network Flip"
+            self.cooldown = self.POST_TRADE_COOLDOWN
 
+        # Reward Structure
         reward = 0.0
         if trade_closed:
             realized_pips = self.unrealized_pnl / self.PIP_SCALAR
@@ -126,9 +131,9 @@ class XAUMTFEnv(gym.Env):
             self.unrealized_pnl = 0.0
         else:
             if prev_pos == 0.0: 
-                reward = -0.01
+                reward = 0.0  # 🚀 Neutral flat reward (No decay penalty)
             else:
-                # Compounding time-in-trade penalty to stop the network from hoarding open trades
+                # Compounding time penalty only while holding open risk
                 reward = -0.001 * (self.bars_in_trade ** 1.5)
 
         if target_pos != 0.0 and target_pos != prev_pos:
