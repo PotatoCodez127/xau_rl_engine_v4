@@ -12,16 +12,16 @@ from training.cpcv_validation import PurgedCombinatorialCV
 def run_backtest():
     project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
     data_path = os.path.join(project_root, 'data', 'oos_holdout_tensor.pkl')
-    oracle_path = os.path.join(project_root, 'deployment', 'oracle.onnx')
-    actor_path = os.path.join(project_root, 'deployment', 'actor.onnx')
+    oracle_path = os.path.join(project_root, 'compiled_models', 'oracle.onnx')
+    actor_path = os.path.join(project_root, 'compiled_models', 'actor.onnx')
 
-    print("📊 Loading Master Dataset & CPCV Splits...")
+    print("📦 Loading Master Dataset & CPCV Splits...")
     mtf_dict = joblib.load(data_path)
     cpcv = PurgedCombinatorialCV(n_folds=6, n_test_folds=2)
     paths = list(cpcv.split(mtf_dict["15m"]))
     _, test_idx = paths[-1] 
 
-    print("⚡ Initializing ONNX Inference Engines...")
+    print("🔥 Initializing ONNX Inference Engines...")
     opts = ort.SessionOptions()
     opts.intra_op_num_threads = 1
     oracle_session = ort.InferenceSession(oracle_path, opts, providers=['CPUExecutionProvider'])
@@ -32,23 +32,33 @@ def run_backtest():
     trade_log = []
     
     position, entry_price, unrealized_pnl, cooldown = 0.0, 0.0, 0.0, 0
-    CONVICTION_THRESHOLD, PIP_SCALAR, SPREAD_PIPS = 0.60, 0.10, 2.0
-    
+    CONVICTION_THRESHOLD, PIP_SCALAR, SPREAD_PIPS = 0.30, 0.10, 2.0 # Matched to Env
+
     print(f"🚀 Starting Walk-Forward Simulation ({len(test_idx)} steps)...")
 
+    # FIX 1: Timeframe alignment logic mirrored from V7.3 training environment
     def slice_tf(tf, length, current_step):
         data = mtf_dict[tf]
         if hasattr(data, "values"): data = data.values
-        idx = min(current_step, len(data))
+        
+        if tf == "15m": idx = current_step
+        elif tf == "30m": idx = current_step // 2
+        elif tf == "1H": idx = current_step // 4
+        elif tf == "4H": idx = current_step // 16
+        else: idx = current_step
+        
+        idx = min(idx, len(data))
+        
         if idx < length:
-            pad = np.zeros((length - idx, 11), dtype=np.float32)
+            # FIX 2: Dynamic feature column width to prevent vstack crashes
+            pad = np.zeros((length - idx, data.shape[1]), dtype=np.float32)
             return np.vstack([pad, data[:idx]]).astype(np.float32)
         return data[idx - length : idx].astype(np.float32)
 
     for i in range(128, len(test_idx)):
         idx = test_idx[i]
         
-        # FIX: Detect CPCV fold gaps and force-close phantom trades
+        # Detect CPCV fold gaps and force-close phantom trades
         if i > 128 and idx != test_idx[i-1] + 1:
             if position != 0.0:
                 realized = unrealized_pnl * 100.0
@@ -64,9 +74,10 @@ def run_backtest():
                 
         data_15m = mtf_dict["15m"].values if hasattr(mtf_dict["15m"], "iloc") else mtf_dict["15m"]
         current_price = data_15m[idx, 3] 
-        
+
         m15, m30 = slice_tf("15m", 128, idx), slice_tf("30m", 64, idx)
         h1, h4 = slice_tf("1H", 32, idx), slice_tf("4H", 16, idx)
+
         state_vec = np.array([position, 1.0, unrealized_pnl, cooldown], dtype=np.float32)
 
         inputs_oracle = {
@@ -80,9 +91,11 @@ def run_backtest():
         oracle_probs = oracle_session.run(None, inputs_oracle)[0]
         action_outputs = actor_session.run(None, {"oracle_probs": oracle_probs, "state": inputs_oracle["state"]})
         
+        # FIX 3: Removed double np.tanh() since ONNX output is already bound between -1 and 1
         raw_action = action_outputs[0][0]
-        direction_vol = np.tanh(raw_action[0])
-        k_tp, k_sl = (np.tanh(raw_action[1]) + 1.0) / 2.0, (np.tanh(raw_action[2]) + 1.0) / 2.0
+        direction_vol = raw_action[0]
+        k_tp = (raw_action[1] + 1.0) / 2.0
+        k_sl = (raw_action[2] + 1.0) / 2.0
 
         # ==========================================
         # ENGINE PHYSICS
@@ -142,7 +155,7 @@ def run_backtest():
             unrealized_pnl = 0.0
 
         # ==========================================
-        # UPDATE ENTRY PRICE (ONLY IF NEW TRADE)
+        # UPDATE ENTRY PRICE
         # ==========================================
         if target_pos != 0.0 and target_pos != prev_pos:
             entry_price = current_price
@@ -172,7 +185,7 @@ def run_backtest():
     profit_factor = gross_profit / gross_loss if gross_loss > 0 else float('inf')
 
     print("\n" + "="*40)
-    print("📈 OUT-OF-SAMPLE TEAR SHEET (PATH 15)")
+    print("  OUT-OF-SAMPLE TEAR SHEET")
     print("="*40)
     print(f"Total Trades:   {total_trades}")
     print(f"Win Rate:       {win_rate:.2f}%")
@@ -181,7 +194,7 @@ def run_backtest():
     print("="*40)
 
     plt.plot(equity_curve)
-    plt.title("OOS Equity Curve (Path 15 - Hard Lock)")
+    plt.title("OOS Equity Curve - Tri-Brain System")
     plt.ylabel("Account Balance ($)")
     plt.xlabel("Steps")
     plt.grid()
