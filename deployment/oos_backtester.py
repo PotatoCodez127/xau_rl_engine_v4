@@ -33,7 +33,7 @@ def run_backtest():
     
     position, entry_price, unrealized_pnl, cooldown = 0.0, 0.0, 0.0, 0
     # Temporarily drop the conviction threshold so the untrained network is forced to trade
-    CONVICTION_THRESHOLD, PIP_SCALAR, SPREAD_PIPS = 0.00, 0.10, 2.0
+    CONVICTION_THRESHOLD, PIP_SCALAR, SPREAD_PIPS = 0.3, 0.10, 2.0
 
     print(f"🚀 Starting Walk-Forward Simulation ({len(test_idx)} steps)...")
 
