@@ -42,10 +42,11 @@ class XAUMTFEnv(gym.Env):
         self.entry_price = 0.0
         self.unrealized_pnl = 0.0
         self.cooldown = 0
+        self.bars_in_trade = 0
         return self._get_obs(), {}
 
     def _slice_tf(self, tf, length):
-        data = self.mtf_tensors[tf] # 🚀 Slicing directly on GPU
+        data = self.mtf_tensors[tf]
         
         if tf == "15m": idx = self.current_step
         elif tf == "30m": idx = self.current_step // 2
@@ -69,10 +70,11 @@ class XAUMTFEnv(gym.Env):
         }
 
     def step(self, action):
-        current_price = self.data_15m[self.current_step, 3] 
+        current_price = self.data_15m[self.current_step, 3]
+
         raw_direction = action[0]
-        k_tp = (action[1] + 1.0) / 2.0 
-        k_sl = (action[2] + 1.0) / 2.0 
+        k_tp = (action[1] + 1.0) / 2.0
+        k_sl = (action[2] + 1.0) / 2.0
         
         prev_pos = self.position
         
@@ -87,6 +89,7 @@ class XAUMTFEnv(gym.Env):
 
         sl_hit = (prev_pos != 0.0) and (self.unrealized_pnl <= target_sl)
         tp_hit = (prev_pos != 0.0) and (self.unrealized_pnl >= target_tp)
+        time_stop_hit = (prev_pos != 0.0) and (self.bars_in_trade >= 96) # Hard stop after 24 hours (96 15m bars)
 
         target_pos = prev_pos
         if self.cooldown > 0:
@@ -107,6 +110,9 @@ class XAUMTFEnv(gym.Env):
         elif tp_hit:
             trade_closed, reason = True, "Take Profit"
             target_pos = 0.0
+        elif time_stop_hit:
+            trade_closed, reason = True, "Time Stop"
+            target_pos, self.cooldown = 0.0, 5
         elif prev_pos != 0.0 and target_pos != prev_pos:
             trade_closed, reason = True, "Network Flip"
 
@@ -115,14 +121,23 @@ class XAUMTFEnv(gym.Env):
             realized_pips = self.unrealized_pnl / self.PIP_SCALAR
             if reason == "Take Profit":
                 reward = (realized_pips / 10.0) + 2.0
-            elif reason in ["Stop Loss", "Network Flip"]:
+            elif reason in ["Stop Loss", "Time Stop", "Network Flip"]:
                 reward = (realized_pips / 10.0)
             self.unrealized_pnl = 0.0
         else:
-            if prev_pos == 0.0: reward = -0.01
+            if prev_pos == 0.0: 
+                reward = -0.01
+            else:
+                # Compounding time-in-trade penalty to stop the network from hoarding open trades
+                reward = -0.001 * (self.bars_in_trade ** 1.5)
 
         if target_pos != 0.0 and target_pos != prev_pos:
             self.entry_price = current_price
+            self.bars_in_trade = 1
+        elif target_pos != 0.0 and target_pos == prev_pos:
+            self.bars_in_trade += 1
+        else:
+            self.bars_in_trade = 0
             
         self.position = target_pos
         self.current_step += 1
