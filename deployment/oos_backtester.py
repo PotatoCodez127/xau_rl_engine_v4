@@ -33,7 +33,14 @@ def run_backtest():
     
     position, entry_price, unrealized_pnl, cooldown, bars_in_trade = 0.0, 0.0, 0.0, 0, 0
 
-    CONVICTION_THRESHOLD, PIP_SCALAR, SPREAD_PIPS = 0.00, 0.10, 2.0
+    # ==============================================================================
+    # CALIBRATED HYPERPARAMETERS (Target: 1-5 Trades / Day)
+    # ==============================================================================
+    PIP_SCALAR = 0.10
+    SPREAD_PIPS = 2.0
+    CONVICTION_THRESHOLD = 0.55  # Tightened to filter out noise
+    POST_TRADE_COOLDOWN = 12     # 12 bars = 3 Hours post-trade lock
+    MAX_HOLD_BARS = 32           # 32 bars = 8 Hours max duration before forced exit
 
     print(f"Starting Walk-Forward Simulation ({len(test_idx)} steps)...")
 
@@ -112,7 +119,7 @@ def run_backtest():
 
         sl_hit = (prev_pos != 0.0) and (unrealized_pnl <= target_sl)
         tp_hit = (prev_pos != 0.0) and (unrealized_pnl >= target_tp)
-        time_stop_hit = (prev_pos != 0.0) and (bars_in_trade >= 96)
+        time_stop_hit = (prev_pos != 0.0) and (bars_in_trade >= MAX_HOLD_BARS)
 
         # ==========================================
         # THE HARD LOCK EXECUTION LOGIC
@@ -136,15 +143,16 @@ def run_backtest():
         
         if sl_hit:
             trade_closed, reason = True, "Stop Loss"
-            target_pos, cooldown = 0.0, 5
+            target_pos, cooldown = 0.0, POST_TRADE_COOLDOWN
         elif tp_hit:
             trade_closed, reason = True, "Take Profit"
-            target_pos = 0.0
+            target_pos, cooldown = 0.0, POST_TRADE_COOLDOWN
         elif time_stop_hit:
             trade_closed, reason = True, "Time Stop"
-            target_pos, cooldown = 0.0, 5
+            target_pos, cooldown = 0.0, POST_TRADE_COOLDOWN
         elif prev_pos != 0.0 and target_pos != prev_pos:
             trade_closed, reason = True, "Network Flip"
+            cooldown = POST_TRADE_COOLDOWN
 
         if trade_closed:
             realized = unrealized_pnl * 100.0
