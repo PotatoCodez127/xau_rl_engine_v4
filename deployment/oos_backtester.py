@@ -15,13 +15,13 @@ def run_backtest():
     oracle_path = os.path.join(project_root, 'deployment', 'oracle.onnx')
     actor_path = os.path.join(project_root, 'deployment', 'actor.onnx')
 
-    print("📦 Loading Master Dataset & CPCV Splits...")
+    print("Loading Master Dataset & CPCV Splits...")
     mtf_dict = joblib.load(data_path)
     cpcv = PurgedCombinatorialCV(n_folds=6, n_test_folds=2)
     paths = list(cpcv.split(mtf_dict["15m"]))
     _, test_idx = paths[-1] 
 
-    print("🔥 Initializing ONNX Inference Engines...")
+    print("Initializing ONNX Inference Engines...")
     opts = ort.SessionOptions()
     opts.intra_op_num_threads = 1
     oracle_session = ort.InferenceSession(oracle_path, opts, providers=['CPUExecutionProvider'])
@@ -31,13 +31,12 @@ def run_backtest():
     equity_curve = [equity]
     trade_log = []
     
-    position, entry_price, unrealized_pnl, cooldown = 0.0, 0.0, 0.0, 0
-    # Temporarily drop the conviction threshold so the untrained network is forced to trade
-    CONVICTION_THRESHOLD, PIP_SCALAR, SPREAD_PIPS = 0.3, 0.10, 2.0
+    position, entry_price, unrealized_pnl, cooldown, bars_in_trade = 0.0, 0.0, 0.0, 0, 0
 
-    print(f"🚀 Starting Walk-Forward Simulation ({len(test_idx)} steps)...")
+    CONVICTION_THRESHOLD, PIP_SCALAR, SPREAD_PIPS = 0.00, 0.10, 2.0
 
-    # FIX 1: Timeframe alignment logic mirrored from V7.3 training environment
+    print(f"Starting Walk-Forward Simulation ({len(test_idx)} steps)...")
+
     def slice_tf(tf, length, current_step):
         data = mtf_dict[tf]
         if hasattr(data, "values"): data = data.values
@@ -51,7 +50,6 @@ def run_backtest():
         idx = min(idx, len(data))
         
         if idx < length:
-            # FIX 2: Dynamic feature column width to prevent vstack crashes
             pad = np.zeros((length - idx, data.shape[1]), dtype=np.float32)
             return np.vstack([pad, data[:idx]]).astype(np.float32)
         return data[idx - length : idx].astype(np.float32)
@@ -72,6 +70,7 @@ def run_backtest():
                 unrealized_pnl = 0.0
                 position = 0.0
                 cooldown = 0
+                bars_in_trade = 0
                 
         data_15m = mtf_dict["15m"].values if hasattr(mtf_dict["15m"], "iloc") else mtf_dict["15m"]
         current_price = data_15m[idx, 3] 
@@ -80,7 +79,6 @@ def run_backtest():
         h1, h4 = slice_tf("1H", 32, idx), slice_tf("4H", 16, idx)
 
         state_vec = np.array([position, 1.0, unrealized_pnl, cooldown], dtype=np.float32)
-
         inputs_oracle = {
             "15m": np.expand_dims(m15, axis=0).astype(np.float32),
             "30m": np.expand_dims(m30, axis=0).astype(np.float32),
@@ -92,11 +90,11 @@ def run_backtest():
         oracle_probs = oracle_session.run(None, inputs_oracle)[0]
         action_outputs = actor_session.run(None, {"oracle_probs": oracle_probs, "state": inputs_oracle["state"]})
         
-        # FIX 3: Re-applied np.tanh() because the ONNX wrapper exports the raw mean, not the squashed action
+        # Tanh bounds are now enforced within the ONNX graph
         raw_action = action_outputs[0][0]
-        direction_vol = np.tanh(raw_action[0])
-        k_tp = (np.tanh(raw_action[1]) + 1.0) / 2.0
-        k_sl = (np.tanh(raw_action[2]) + 1.0) / 2.0
+        direction_vol = raw_action[0]
+        k_tp = (raw_action[1] + 1.0) / 2.0
+        k_sl = (raw_action[2] + 1.0) / 2.0
 
         # ==========================================
         # ENGINE PHYSICS
@@ -114,6 +112,7 @@ def run_backtest():
 
         sl_hit = (prev_pos != 0.0) and (unrealized_pnl <= target_sl)
         tp_hit = (prev_pos != 0.0) and (unrealized_pnl >= target_tp)
+        time_stop_hit = (prev_pos != 0.0) and (bars_in_trade >= 96)
 
         # ==========================================
         # THE HARD LOCK EXECUTION LOGIC
@@ -134,12 +133,16 @@ def run_backtest():
         # TRADE CLOSURE EVALUATION
         # ==========================================
         trade_closed, reason = False, ""
+        
         if sl_hit:
             trade_closed, reason = True, "Stop Loss"
             target_pos, cooldown = 0.0, 5
         elif tp_hit:
             trade_closed, reason = True, "Take Profit"
             target_pos = 0.0
+        elif time_stop_hit:
+            trade_closed, reason = True, "Time Stop"
+            target_pos, cooldown = 0.0, 5
         elif prev_pos != 0.0 and target_pos != prev_pos:
             trade_closed, reason = True, "Network Flip"
 
@@ -156,10 +159,15 @@ def run_backtest():
             unrealized_pnl = 0.0
 
         # ==========================================
-        # UPDATE ENTRY PRICE
+        # UPDATE ENTRY PRICE AND TIME IN TRADE
         # ==========================================
         if target_pos != 0.0 and target_pos != prev_pos:
             entry_price = current_price
+            bars_in_trade = 1
+        elif target_pos != 0.0 and target_pos == prev_pos:
+            bars_in_trade += 1
+        else:
+            bars_in_trade = 0
             
         position = target_pos
         equity_curve.append(equity)
