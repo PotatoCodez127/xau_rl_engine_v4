@@ -12,8 +12,8 @@ from training.cpcv_validation import PurgedCombinatorialCV
 def run_backtest():
     project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
     data_path = os.path.join(project_root, 'data', 'oos_holdout_tensor.pkl')
-    oracle_path = os.path.join(project_root, 'compiled_models', 'oracle.onnx')
-    actor_path = os.path.join(project_root, 'compiled_models', 'actor.onnx')
+    oracle_path = os.path.join(project_root, 'deployment', 'oracle.onnx')
+    actor_path = os.path.join(project_root, 'deployment', 'actor.onnx')
 
     print("📦 Loading Master Dataset & CPCV Splits...")
     mtf_dict = joblib.load(data_path)
@@ -32,7 +32,8 @@ def run_backtest():
     trade_log = []
     
     position, entry_price, unrealized_pnl, cooldown = 0.0, 0.0, 0.0, 0
-    CONVICTION_THRESHOLD, PIP_SCALAR, SPREAD_PIPS = 0.30, 0.10, 2.0 # Matched to Env
+    # Temporarily drop the conviction threshold so the untrained network is forced to trade
+    CONVICTION_THRESHOLD, PIP_SCALAR, SPREAD_PIPS = 0.00, 0.10, 2.0
 
     print(f"🚀 Starting Walk-Forward Simulation ({len(test_idx)} steps)...")
 
@@ -91,11 +92,11 @@ def run_backtest():
         oracle_probs = oracle_session.run(None, inputs_oracle)[0]
         action_outputs = actor_session.run(None, {"oracle_probs": oracle_probs, "state": inputs_oracle["state"]})
         
-        # FIX 3: Removed double np.tanh() since ONNX output is already bound between -1 and 1
+        # FIX 3: Re-applied np.tanh() because the ONNX wrapper exports the raw mean, not the squashed action
         raw_action = action_outputs[0][0]
-        direction_vol = raw_action[0]
-        k_tp = (raw_action[1] + 1.0) / 2.0
-        k_sl = (raw_action[2] + 1.0) / 2.0
+        direction_vol = np.tanh(raw_action[0])
+        k_tp = (np.tanh(raw_action[1]) + 1.0) / 2.0
+        k_sl = (np.tanh(raw_action[2]) + 1.0) / 2.0
 
         # ==========================================
         # ENGINE PHYSICS
