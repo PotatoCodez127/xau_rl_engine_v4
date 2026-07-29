@@ -1,38 +1,43 @@
 import gymnasium as gym
 from gymnasium import spaces
 import numpy as np
-import pandas as pd
+import torch
 
 class XAUMTFEnv(gym.Env):
-    """
-    Tri-Brain XAUUSD MTF Gym Environment (Bulletproof Hard Lock Edition)
-    """
-    metadata = {'render.modes': ['human']}
-
-    def __init__(self, mtf_dict, max_steps=None):
+    def __init__(self, mtf_dict, start_step=128, max_steps=None):
         super(XAUMTFEnv, self).__init__()
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.mtf_dict = mtf_dict
         self.data_15m = self.mtf_dict["15m"].values if hasattr(self.mtf_dict["15m"], "values") else self.mtf_dict["15m"]
+        
+        # Convert dictionary to GPU tensors once on init
+        self.mtf_tensors = {
+            k: torch.tensor(v.values if hasattr(v, "values") else v, dtype=torch.float32, device=self.device)
+            for k, v in self.mtf_dict.items()
+        }
+        
         self.total_steps = len(self.data_15m)
+        self.start_step = start_step if start_step >= 128 else 128
         self.max_steps = max_steps if max_steps else self.total_steps
+        num_cols = self.data_15m.shape[1]
         
         self.action_space = spaces.Box(low=-1.0, high=1.0, shape=(3,), dtype=np.float32)
         self.observation_space = spaces.Dict({
-            "15m": spaces.Box(low=-10, high=10, shape=(128, 11), dtype=np.float32),
-            "30m": spaces.Box(low=-10, high=10, shape=(64, 11), dtype=np.float32),
-            "1H": spaces.Box(low=-10, high=10, shape=(32, 11), dtype=np.float32),
-            "4H": spaces.Box(low=-10, high=10, shape=(16, 11), dtype=np.float32),
+            "15m": spaces.Box(low=-10, high=10, shape=(128, num_cols), dtype=np.float32),
+            "30m": spaces.Box(low=-10, high=10, shape=(64, num_cols), dtype=np.float32),
+            "1H": spaces.Box(low=-10, high=10, shape=(32, num_cols), dtype=np.float32),
+            "4H": spaces.Box(low=-10, high=10, shape=(16, num_cols), dtype=np.float32),
             "state": spaces.Box(low=-100, high=100, shape=(4,), dtype=np.float32)
         })
 
         self.PIP_SCALAR = 0.10
         self.SPREAD_PIPS = 2.0
-        self.CONVICTION_THRESHOLD = 0.60
+        self.CONVICTION_THRESHOLD = 0.30
         self.reset()
 
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
-        self.current_step = 128
+        self.current_step = self.start_step
         self.position = 0.0
         self.entry_price = 0.0
         self.unrealized_pnl = 0.0
@@ -40,16 +45,23 @@ class XAUMTFEnv(gym.Env):
         return self._get_obs(), {}
 
     def _slice_tf(self, tf, length):
-        data = self.mtf_dict[tf]
-        if hasattr(data, "values"): data = data.values
-        idx = min(self.current_step, len(data))
+        data = self.mtf_tensors[tf] # 🚀 Slicing directly on GPU
+        
+        if tf == "15m": idx = self.current_step
+        elif tf == "30m": idx = self.current_step // 2
+        elif tf == "1H": idx = self.current_step // 4
+        elif tf == "4H": idx = self.current_step // 16
+        else: idx = self.current_step
+        
+        idx = min(idx, data.shape[0])
+        
         if idx < length:
-            pad = np.zeros((length - idx, 11), dtype=np.float32)
-            return np.vstack([pad, data[:idx]]).astype(np.float32)
-        return data[idx - length : idx].astype(np.float32)
+            pad = torch.zeros((length - idx, data.shape[1]), dtype=torch.float32, device=self.device)
+            return torch.vstack([pad, data[:idx]])
+        return data[idx - length : idx]
 
     def _get_obs(self):
-        state_vec = np.array([self.position, 1.0, self.unrealized_pnl, self.cooldown], dtype=np.float32)
+        state_vec = torch.tensor([self.position, 1.0, self.unrealized_pnl, self.cooldown], dtype=torch.float32, device=self.device)
         return {
             "15m": self._slice_tf("15m", 128), "30m": self._slice_tf("30m", 64),
             "1H": self._slice_tf("1H", 32), "4H": self._slice_tf("4H", 16),
@@ -62,26 +74,20 @@ class XAUMTFEnv(gym.Env):
         k_tp = (action[1] + 1.0) / 2.0 
         k_sl = (action[2] + 1.0) / 2.0 
         
-        # 1. Snapshot State
         prev_pos = self.position
         
-        # 2. Process Unrealized PnL strictly using OLD entry price
         if prev_pos != 0.0:
             raw_pnl = prev_pos * (current_price - self.entry_price)
             self.unrealized_pnl = raw_pnl - (self.SPREAD_PIPS * self.PIP_SCALAR)
         else:
             self.unrealized_pnl = 0.0
 
-        # 3. Dynamic Targets
-        sl_pips = 20.0 + (k_sl * 30.0)
-        target_sl = -1.0 * (sl_pips * self.PIP_SCALAR)
-        tp_pips = 40.0 + (k_tp * 60.0)
-        target_tp = tp_pips * self.PIP_SCALAR
+        target_sl = -1.0 * ((20.0 + (k_sl * 30.0)) * self.PIP_SCALAR)
+        target_tp = (40.0 + (k_tp * 60.0)) * self.PIP_SCALAR
 
         sl_hit = (prev_pos != 0.0) and (self.unrealized_pnl <= target_sl)
         tp_hit = (prev_pos != 0.0) and (self.unrealized_pnl >= target_tp)
 
-        # 4. Intended Actions (The Hard Lock: No Flat Exits)
         target_pos = prev_pos
         if self.cooldown > 0:
             self.cooldown -= 1
@@ -94,7 +100,6 @@ class XAUMTFEnv(gym.Env):
             elif prev_pos < 0.0:
                 if raw_direction > self.CONVICTION_THRESHOLD: target_pos = 1.0
 
-        # 5. Evaluate Closure
         trade_closed, reason = False, ""
         if sl_hit:
             trade_closed, reason = True, "Stop Loss"
@@ -105,19 +110,17 @@ class XAUMTFEnv(gym.Env):
         elif prev_pos != 0.0 and target_pos != prev_pos:
             trade_closed, reason = True, "Network Flip"
 
-        # 6. Distribute Rewards BEFORE modifying Entry Price
         reward = 0.0
         if trade_closed:
             realized_pips = self.unrealized_pnl / self.PIP_SCALAR
             if reason == "Take Profit":
-                reward = (realized_pips / 10.0) + 2.0 # TP Completion Bonus
+                reward = (realized_pips / 10.0) + 2.0
             elif reason in ["Stop Loss", "Network Flip"]:
                 reward = (realized_pips / 10.0)
             self.unrealized_pnl = 0.0
         else:
             if prev_pos == 0.0: reward = -0.01
 
-        # 7. Finalize Setup for Next Step
         if target_pos != 0.0 and target_pos != prev_pos:
             self.entry_price = current_price
             
@@ -125,6 +128,4 @@ class XAUMTFEnv(gym.Env):
         self.current_step += 1
         
         terminated = self.current_step >= self.max_steps - 1
-        truncated = False
-        
-        return self._get_obs(), reward, terminated, truncated, {}
+        return self._get_obs(), reward, terminated, False, {}
