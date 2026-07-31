@@ -8,12 +8,18 @@ import matplotlib.pyplot as plt
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from training.cpcv_validation import PurgedCombinatorialCV
+from models.gatekeeper_hmm import ContextGatekeeper
 
 def run_backtest():
     project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
     data_path = os.path.join(project_root, 'data', 'oos_holdout_tensor.pkl')
     oracle_path = os.path.join(project_root, 'deployment', 'oracle.onnx')
     actor_path = os.path.join(project_root, 'deployment', 'actor.onnx')
+    gatekeeper_path = os.path.join(project_root, 'checkpoints', 'gatekeeper.pkl')
+    
+    # Fallback if the user downloaded gatekeeper directly to deployment/
+    if not os.path.exists(gatekeeper_path):
+        gatekeeper_path = os.path.join(project_root, 'deployment', 'gatekeeper.pkl')
 
     print("Loading Master Dataset & CPCV Splits...")
     mtf_dict = joblib.load(data_path)
@@ -21,11 +27,18 @@ def run_backtest():
     paths = list(cpcv.split(mtf_dict["15m"]))
     _, test_idx = paths[-1] 
 
-    print("Initializing ONNX Inference Engines...")
+    print("Initializing ONNX Inference Engines & Gatekeeper...")
     opts = ort.SessionOptions()
     opts.intra_op_num_threads = 1
     oracle_session = ort.InferenceSession(oracle_path, opts, providers=['CPUExecutionProvider'])
     actor_session = ort.InferenceSession(actor_path, opts, providers=['CPUExecutionProvider'])
+
+    gatekeeper = ContextGatekeeper(n_components=3)
+    if os.path.exists(gatekeeper_path):
+        gatekeeper.load_model(gatekeeper_path)
+        print("✅ Gatekeeper HMM restored and operational.")
+    else:
+        print("⚠️ WARNING: Gatekeeper HMM not found. Running un-gated.")
 
     equity = 10000.0 
     equity_curve = [equity]
@@ -34,13 +47,15 @@ def run_backtest():
     position, entry_price, unrealized_pnl, cooldown, bars_in_trade = 0.0, 0.0, 0.0, 0, 0
 
     # ==============================================================================
-    # CALIBRATED HYPERPARAMETERS (Target: 1-5 Trades / Day)
+    # CALIBRATED HYPERPARAMETERS
     # ==============================================================================
     PIP_SCALAR = 0.10
     SPREAD_PIPS = 2.0
-    CONVICTION_THRESHOLD = 0.55  # Tightened to filter out noise
-    POST_TRADE_COOLDOWN = 12     # 12 bars = 3 Hours post-trade lock
-    MAX_HOLD_BARS = 32           # 32 bars = 8 Hours max duration before forced exit
+    CONVICTION_THRESHOLD = 0.55  
+    EXIT_THRESHOLD = 0.20        # 🚀 The Escape Hatch boundary
+    GATEKEEPER_THRESHOLD = 0.60  # Minimum Oracle probability to pass the veto
+    POST_TRADE_COOLDOWN = 12     
+    MAX_HOLD_BARS = 32           
 
     print(f"Starting Walk-Forward Simulation ({len(test_idx)} steps)...")
 
@@ -97,11 +112,24 @@ def run_backtest():
         oracle_probs = oracle_session.run(None, inputs_oracle)[0]
         action_outputs = actor_session.run(None, {"oracle_probs": oracle_probs, "state": inputs_oracle["state"]})
         
-        # Tanh bounds are now enforced within the ONNX graph
         raw_action = action_outputs[0][0]
         direction_vol = raw_action[0]
         k_tp = (raw_action[1] + 1.0) / 2.0
         k_sl = (raw_action[2] + 1.0) / 2.0
+
+        # ==========================================
+        # GATEKEEPER REGIME FILTER
+        # ==========================================
+        is_authorized = True
+        if gatekeeper.is_fitted:
+            # Extract recent 15m volatility/macro features (Index 0, 1)
+            macro_features = m15[-1, :2].reshape(1, -1)
+            current_regime = gatekeeper.predict_regime(macro_features)
+            is_authorized = gatekeeper.authorize_execution(current_regime, oracle_probs[0], conviction_threshold=GATEKEEPER_THRESHOLD)
+
+        # If Gatekeeper vetoes, zero out the conviction to stay flat or trigger Escape Hatch
+        if not is_authorized:
+            direction_vol = 0.0
 
         # ==========================================
         # ENGINE PHYSICS
@@ -122,9 +150,10 @@ def run_backtest():
         time_stop_hit = (prev_pos != 0.0) and (bars_in_trade >= MAX_HOLD_BARS)
 
         # ==========================================
-        # THE HARD LOCK EXECUTION LOGIC
+        # THE HARD LOCK EXECUTION LOGIC + ESCAPE HATCH
         # ==========================================
         target_pos = prev_pos
+        
         if cooldown > 0:
             cooldown -= 1
         else:
@@ -133,8 +162,10 @@ def run_backtest():
                 elif direction_vol < -CONVICTION_THRESHOLD: target_pos = -1.0
             elif prev_pos > 0.0:
                 if direction_vol < -CONVICTION_THRESHOLD: target_pos = -1.0
+                elif direction_vol < EXIT_THRESHOLD: target_pos = 0.0  # Safe Exit
             elif prev_pos < 0.0:
                 if direction_vol > CONVICTION_THRESHOLD: target_pos = 1.0
+                elif direction_vol > -EXIT_THRESHOLD: target_pos = 0.0 # Safe Exit
 
         # ==========================================
         # TRADE CLOSURE EVALUATION
@@ -150,6 +181,9 @@ def run_backtest():
         elif time_stop_hit:
             trade_closed, reason = True, "Time Stop"
             target_pos, cooldown = 0.0, POST_TRADE_COOLDOWN
+        elif prev_pos != 0.0 and target_pos == 0.0:
+            trade_closed, reason = True, "Escape Hatch Exit"
+            cooldown = POST_TRADE_COOLDOWN
         elif prev_pos != 0.0 and target_pos != prev_pos:
             trade_closed, reason = True, "Network Flip"
             cooldown = POST_TRADE_COOLDOWN

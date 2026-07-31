@@ -94,7 +94,12 @@ class XAUMTFEnv(gym.Env):
         tp_hit = (prev_pos != 0.0) and (self.unrealized_pnl >= target_tp)
         time_stop_hit = (prev_pos != 0.0) and (self.bars_in_trade >= self.MAX_HOLD_BARS)
 
+        # ==========================================
+        # THE HARD LOCK EXECUTION LOGIC (TRAINING)
+        # ==========================================
         target_pos = prev_pos
+        EXIT_THRESHOLD = 0.20  # 🚀 Must match oos_backtester.py exactly
+        
         if self.cooldown > 0:
             self.cooldown -= 1
         else:
@@ -103,8 +108,10 @@ class XAUMTFEnv(gym.Env):
                 elif raw_direction < -self.CONVICTION_THRESHOLD: target_pos = -1.0
             elif prev_pos > 0.0:
                 if raw_direction < -self.CONVICTION_THRESHOLD: target_pos = -1.0
+                elif raw_direction < EXIT_THRESHOLD: target_pos = 0.0  # The Escape Hatch
             elif prev_pos < 0.0:
                 if raw_direction > self.CONVICTION_THRESHOLD: target_pos = 1.0
+                elif raw_direction > -EXIT_THRESHOLD: target_pos = 0.0 # The Escape Hatch
 
         trade_closed, reason = False, ""
         if sl_hit:
